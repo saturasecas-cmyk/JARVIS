@@ -1,0 +1,30 @@
+name: Compilar agente de Jarvis (.exe)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - jarvis_agent.py
+      - requirements.txt
+      - .github/workflows/build-agent.yml
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: |
+          pip install -r requirements.txt pyinstaller
+      - name: Comprobar sintaxis
+        run: python -m py_compile jarvis_agent.py
+      - name: Compilar a .exe
+        run: pyinstaller --onefile --name jarvis_agent jarvis_agent.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis_agent-windows
+          path: dist/jarvis_agent.exe

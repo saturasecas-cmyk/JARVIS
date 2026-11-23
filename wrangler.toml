@@ -1,0 +1,14 @@
+name = "jarvis"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+[ai]
+binding = "AI"
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "JarvisHub"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["JarvisHub"]
