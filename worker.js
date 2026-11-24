@@ -1,7 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 
-// Modelos gratuitos de Workers AI.
-const MODEL = "@cf/meta/llama-3.1-8b-instruct";
+// Modelos gratuitos de Workers AI. Gemma 4 (de Google) con llamadas a herramientas; si falla, Llama.
+const MODEL = "@cf/google/gemma-4-26b-a4b-it";
+const FALLBACK_MODEL = "@cf/meta/llama-3.1-8b-instruct";
 const STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
 const MAX_STEPS = 6;
 // Si existe el secreto GEMINI_API_KEY se usa Gemini como cerebro; si falla, se cae a Workers AI.
@@ -221,11 +222,36 @@ export class JarvisHub extends DurableObject {
   async callWorkersAI(history) {
     const messages = [{ role: "system", content: SYSTEM }];
     for (const m of history) {
-      if (m.role === "assistant" && m.parts) continue;
-      messages.push(m.role === "tool" ? { role: "tool", name: m.name, content: m.content } : { role: m.role, content: m.content });
+      if (m.role === "assistant" && m.calls) {
+        messages.push({
+          role: "assistant",
+          content: "",
+          tool_calls: m.calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: JSON.stringify(c.args) } })),
+        });
+      } else if (m.role === "tool") {
+        messages.push({ role: "tool", tool_call_id: m.id, name: m.name, content: m.content });
+      } else {
+        messages.push({ role: m.role, content: m.content });
+      }
     }
-    const res = await this.env.AI.run(MODEL, { messages, tools: TOOLS, max_tokens: 400 });
-    return { text: (res.response ?? "").trim(), calls: res.tool_calls ?? [], parts: null };
+    let res;
+    try {
+      res = await this.env.AI.run(MODEL, { messages, tools: TOOLS, max_tokens: 800 });
+    } catch (e) {
+      // Reserva: Llama no usa ids de herramienta ni tool_calls en el historial.
+      const plain = messages.map((m) => (m.tool_calls ? { role: "assistant", content: "(usé herramientas)" } : m));
+      res = await this.env.AI.run(FALLBACK_MODEL, { messages: plain, tools: TOOLS, max_tokens: 400 });
+    }
+    // Formato nuevo (OpenAI: choices) o formato clásico de Workers AI (response / tool_calls).
+    const msg = res.choices?.[0]?.message;
+    if (msg) {
+      return {
+        text: String(msg.content ?? "").trim(),
+        calls: (msg.tool_calls ?? []).map((c) => ({ id: c.id, name: c.function?.name, arguments: c.function?.arguments ?? {} })),
+        parts: null,
+      };
+    }
+    return { text: String(res.response ?? "").trim(), calls: res.tool_calls ?? [], parts: null };
   }
 
   async think(ws, text) {
@@ -262,16 +288,17 @@ export class JarvisHub extends DurableObject {
               args = {};
             }
           }
-          return { name: c.name, args };
+          return { id: c.id || "call_" + crypto.randomUUID().slice(0, 8), name: c.name, args };
         });
         history.push({
           role: "assistant",
           content: "",
+          calls: parsed,
           parts: out.parts ?? parsed.map((c) => ({ functionCall: { name: c.name, args: c.args } })),
         });
         for (const c of parsed) {
           const result = await this.callTool(ws, c.name, c.args);
-          history.push({ role: "tool", name: c.name, content: String(result).slice(0, 6000) });
+          history.push({ role: "tool", id: c.id, name: c.name, content: String(result).slice(0, 6000) });
         }
       }
     } catch (e) {

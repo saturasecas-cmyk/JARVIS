@@ -43,8 +43,11 @@ Windows pedirá permiso para el micrófono la primera vez: *Configuración → P
 - El audio se envía a tu Worker de Cloudflare solo después de oír "hey Jarvis".
 - Nunca subas la contraseña al código.
 
-## Cerebro: Gemini (opcional, gratis)
-Por defecto Jarvis usa Workers AI. Con una clave de Gemini es bastante más listo eligiendo herramientas:
+## Cerebro
+Por defecto Jarvis usa **Gemma 4** (el modelo abierto de Google) a través de Workers AI: gratis, sin claves y con llamadas a herramientas. Si falla, usa Llama 3.1 como reserva. El modelo se cambia en `MODEL` de `worker.js`.
+
+### Opcional: Gemini
+Con una clave de Gemini (necesita cuenta de Google con la edad verificada) Jarvis usa Gemini en lugar de Gemma:
 1. Crea la clave gratis en https://aistudio.google.com/apikey
 2. Cloudflare → *Workers & Pages* → `jarvis` → *Settings* → *Variables and Secrets* → *Add* → tipo **Secret**, nombre `GEMINI_API_KEY`, pega la clave.
 3. Opcional: variable `GEMINI_MODEL` para cambiar de modelo (por defecto `gemini-2.5-flash`).
