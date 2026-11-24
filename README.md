@@ -1,54 +1,53 @@
-# Jarvis, fase 1 (gratis, todo en GitHub)
+# Jarvis (gratis, todo en GitHub)
 
-Cerebro en Cloudflare (Workers AI) + agente ligero en tu PC con Windows. Por ahora se usa escribiendo; la voz es la fase 2.
+Cerebro y reconocimiento de voz en Cloudflare (gratis) + agente ligero en tu PC con Windows.
 
-**Flujo:** programas en GitHub → GitHub Actions despliega el servidor y compila el `.exe` → tú solo descargas y ejecutas. No necesitas instalar Node ni Python en tu PC.
+**Flujo:** programas en GitHub → GitHub Actions compila el `.exe` → tú lo descargas y lo ejecutas. No necesitas instalar Python ni Node.
 
-## 1. Crear el repositorio
-1. En github.com crea un repositorio nuevo (privado, para proteger tu configuración).
-2. Sube todos los archivos de esta carpeta, incluida `.github/` (en la web: *Add file → Upload files*).
-3. Para editar código sin instalar nada, pulsa la tecla `.` dentro del repositorio: se abre VS Code en el navegador.
+## Qué sabe hacer
+- **Escucha** "hey Jarvis" (detector local, casi no gasta CPU). Tras el pitido, di tu orden y calla un segundo.
+- **Lee** archivos de texto, código y Word (`.docx`) de tu carpeta de usuario.
+- **Escribe en el documento que tengas abierto** (Bloc de notas, Word, WordPad, VS Code...) donde esté el cursor.
+- **Crea o amplía** archivos de texto en Escritorio, Documentos y Descargas (te pide permiso con una ventana).
+- Busca archivos, lista carpetas, abre apps, ordena el escritorio (con permiso) y da info del PC.
+- **Habla** con la voz de Windows.
 
-## 2. Guardar los secretos
-En el repositorio: *Settings → Secrets and variables → Actions → New repository secret*. Crea tres:
+## Instalación
+1. En el repo: pestaña **Actions** → "Compilar agente de Jarvis (.exe)" → última ejecución verde → **Artifacts** → descarga `jarvis_agent-windows` y descomprímelo en una carpeta fija (por ejemplo `C:\Jarvis`).
+2. Abre PowerShell en esa carpeta (escribe `powershell` en la barra de direcciones del Explorador) y ejecuta:
+   ```
+   .\jarvis_agent.exe --setup
+   ```
+   Pide la dirección (`jarvis.saturasecas.workers.dev`) y la contraseña. Se guardan en tu PC, no hay que repetirlo.
+3. Pruébalo con ventana: `.\jarvis_agent.exe`. Di "hey Jarvis", espera el pitido y habla. También puedes escribir.
+4. Cuando te guste, que arranque solo con Windows y sin ventana:
+   ```
+   .\jarvis_agent.exe --autostart on
+   ```
+   (`--autostart off` lo quita.) No muevas la carpeta después de activarlo.
 
-| Nombre | Valor |
-|---|---|
-| `CLOUDFLARE_API_TOKEN` | Cloudflare → *My Profile → API Tokens → Create Token → plantilla "Edit Cloudflare Workers"*. |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare → *Workers & Pages*, aparece a la derecha. |
-| `JARVIS_TOKEN` | Una contraseña larga inventada por ti (30+ caracteres aleatorios). |
+Windows pedirá permiso para el micrófono la primera vez: *Configuración → Privacidad → Micrófono → permitir apps de escritorio*. SmartScreen puede avisar de que el `.exe` no está firmado: es normal.
 
-## 3. Desplegar y compilar
-Al subir los archivos a `main`, GitHub ejecuta solo dos acciones (pestaña *Actions*):
-- **Desplegar Worker de Jarvis**: publica el servidor en Cloudflare. En el registro verás la dirección `https://jarvis.TU-SUBDOMINIO.workers.dev`.
-- **Compilar agente de Jarvis (.exe)**: genera `jarvis_agent.exe`. Descárgalo desde el resumen de la ejecución, en *Artifacts*.
-
-Si no se lanzan solas, entra en *Actions*, elige la acción y pulsa *Run workflow*.
-
-## 4. Arrancar el agente en tu PC
-En PowerShell, en la carpeta donde descargaste el `.exe`:
-
-```
-$env:JARVIS_URL = "wss://jarvis.TU-SUBDOMINIO.workers.dev/ws"
-$env:JARVIS_TOKEN = "LA-MISMA-CONTRASEÑA-DE-JARVIS_TOKEN"
-.\jarvis_agent.exe
-```
-
-Windows SmartScreen puede avisar porque el `.exe` no está firmado: es normal, lo compilas tú.
-
-## 5. Pruébalo
-- "¿Qué hay en mi escritorio?"
-- "Busca el archivo informe"
-- "Abre la calculadora"
-- "Ordena mi escritorio" (te pedirá confirmar en la terminal antes de mover nada)
+## Ejemplos
+- "Hey Jarvis… ¿qué hay en mi escritorio?"
+- "Lee el archivo apuntes y resúmelo."
+- "Escribe en mi documento: reunión mañana a las diez." (haz clic en el documento antes)
+- "Crea un archivo lista.txt con tres ideas para el servidor."
 
 ## Seguridad
-- El agente solo toca Escritorio, Documentos y Descargas.
-- Solo abre las apps de la lista `APPS` en `jarvis_agent.py`.
-- Nunca mueve archivos sin que escribas `s` en el PC.
-- Nunca subas el token al código: va solo en los secretos de GitHub.
+- Solo lee dentro de tu carpeta de usuario y nunca `.ssh`, `AppData`, ni archivos con nombres como *password*, *token* o *secret*.
+- Solo escribe en Escritorio, Documentos y Descargas, nunca sobrescribe, y siempre pide confirmación.
+- Solo teclea en apps de la lista `TYPE_ALLOWED` (nunca en terminales ni navegadores) y se detiene si cambias de ventana.
+- Solo abre las apps de la lista `APPS`.
+- El texto de los archivos que lee se trata como datos, pero un modelo pequeño puede equivocarse: no le pidas que lea archivos de origen dudoso.
+- El audio se envía a tu Worker de Cloudflare solo después de oír "hey Jarvis".
+- Nunca subas la contraseña al código.
 
-## Notas
-- El cupo gratuito de Workers AI es diario. Si se agota, Jarvis dejará de responder hasta el día siguiente.
-- El modelo se cambia en la constante `MODEL` de `worker.js`.
-- Las acciones de GitHub son gratis en repositorios públicos y tienen minutos mensuales gratis en los privados.
+## Límites
+- Con el PC apagado no puede tocar el PC. Para encenderlo hace falta algo siempre encendido en tu red (Wake-on-LAN).
+- Workers AI tiene un cupo gratuito diario; si se agota, Jarvis para hasta el día siguiente.
+- El modelo (`MODEL` en `worker.js`) es pequeño: a veces se equivoca eligiendo herramientas.
+
+## Desarrollo
+- Servidor: `worker.js` + `wrangler.toml`. La acción "Desplegar Worker" es opcional y solo actúa si creas los secretos `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` y `JARVIS_TOKEN`.
+- Agente: `jarvis_agent.py`. Cada herramienta nueva es una función más en `TOOLS` y su descripción en `worker.js`.

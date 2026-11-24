@@ -1,5 +1,7 @@
 name: Desplegar Worker de Jarvis
 
+# Opcional: solo despliega si has creado los secretos en GitHub.
+# Si no, el Worker se despliega por otra vía y esta acción no hace nada.
 on:
   push:
     branches: [main]
@@ -12,9 +14,16 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      HAS_SECRETS: ${{ secrets.CLOUDFLARE_API_TOKEN != '' && secrets.JARVIS_TOKEN != '' }}
     steps:
+      - name: Sin secretos, nada que hacer
+        if: env.HAS_SECRETS != 'true'
+        run: echo "Faltan CLOUDFLARE_API_TOKEN o JARVIS_TOKEN; se omite el despliegue."
       - uses: actions/checkout@v4
+        if: env.HAS_SECRETS == 'true'
       - uses: cloudflare/wrangler-action@v3
+        if: env.HAS_SECRETS == 'true'
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
