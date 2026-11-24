@@ -4,6 +4,9 @@ import { DurableObject } from "cloudflare:workers";
 const MODEL = "@cf/meta/llama-3.1-8b-instruct";
 const STT_MODEL = "@cf/openai/whisper-large-v3-turbo";
 const MAX_STEPS = 6;
+// Si existe el secreto GEMINI_API_KEY se usa Gemini como cerebro; si falla, se cae a Workers AI.
+// El modelo se puede cambiar con la variable GEMINI_MODEL sin tocar el código.
+const GEMINI_DEFAULT = "gemini-2.5-flash";
 
 const SYSTEM =
   "Eres Jarvis, el asistente personal del usuario, al estilo de Iron Man. " +
@@ -174,26 +177,83 @@ export class JarvisHub extends DurableObject {
     });
   }
 
+  // Cerebro 1: Gemini (si hay clave). Devuelve { text, calls, parts }.
+  async callGemini(history) {
+    const contents = [];
+    for (const m of history) {
+      if (m.role === "user") {
+        contents.push({ role: "user", parts: [{ text: m.content }] });
+      } else if (m.role === "assistant") {
+        contents.push({ role: "model", parts: m.parts ?? [{ text: m.content || "." }] });
+      } else if (m.role === "tool") {
+        const part = { functionResponse: { name: m.name, response: { result: m.content } } };
+        const last = contents[contents.length - 1];
+        if (last && last.role === "user" && last.parts[0]?.functionResponse) last.parts.push(part);
+        else contents.push({ role: "user", parts: [part] });
+      }
+    }
+    const declarations = TOOLS.map((t) => {
+      const d = { name: t.name, description: t.description };
+      if (Object.keys(t.parameters.properties ?? {}).length) d.parameters = t.parameters;
+      return d;
+    });
+    const model = this.env.GEMINI_MODEL || GEMINI_DEFAULT;
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-goog-api-key": this.env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: SYSTEM }] },
+        contents,
+        tools: [{ functionDeclarations: declarations }],
+        generationConfig: { maxOutputTokens: 1024, temperature: 0.4 },
+      }),
+    });
+    if (!r.ok) throw new Error(`Gemini ${r.status}: ${(await r.text()).slice(0, 160)}`);
+    const parts = (await r.json()).candidates?.[0]?.content?.parts ?? [];
+    return {
+      text: parts.filter((p) => p.text && !p.thought).map((p) => p.text).join("").trim(),
+      calls: parts.filter((p) => p.functionCall).map((p) => ({ name: p.functionCall.name, arguments: p.functionCall.args ?? {} })),
+      parts,
+    };
+  }
+
+  // Cerebro 2: Workers AI (gratis, sin clave).
+  async callWorkersAI(history) {
+    const messages = [{ role: "system", content: SYSTEM }];
+    for (const m of history) {
+      if (m.role === "assistant" && m.parts) continue;
+      messages.push(m.role === "tool" ? { role: "tool", name: m.name, content: m.content } : { role: m.role, content: m.content });
+    }
+    const res = await this.env.AI.run(MODEL, { messages, tools: TOOLS, max_tokens: 400 });
+    return { text: (res.response ?? "").trim(), calls: res.tool_calls ?? [], parts: null };
+  }
+
   async think(ws, text) {
     const history = (await this.ctx.storage.get("history")) ?? [];
     history.push({ role: "user", content: text });
     let answer = "No he podido completar la petición.";
+    let useGemini = Boolean(this.env.GEMINI_API_KEY);
+    let geminiError = "";
 
     try {
       for (let step = 0; step < MAX_STEPS; step++) {
-        const res = await this.env.AI.run(MODEL, {
-          messages: [{ role: "system", content: SYSTEM }, ...history],
-          tools: TOOLS,
-          max_tokens: 400,
-        });
-        const calls = res.tool_calls ?? [];
-        if (!calls.length) {
-          const t = (res.response ?? "").trim();
-          if (t) answer = t;
+        let out = null;
+        if (useGemini) {
+          try {
+            out = await this.callGemini(history);
+          } catch (e) {
+            useGemini = false;
+            geminiError = e.message;
+          }
+        }
+        if (!out) out = await this.callWorkersAI(history);
+
+        if (!out.calls.length) {
+          if (out.text) answer = out.text;
           history.push({ role: "assistant", content: answer });
           break;
         }
-        for (const c of calls) {
+        const parsed = out.calls.map((c) => {
           let args = c.arguments ?? {};
           if (typeof args === "string") {
             try {
@@ -202,7 +262,15 @@ export class JarvisHub extends DurableObject {
               args = {};
             }
           }
-          const result = await this.callTool(ws, c.name, args);
+          return { name: c.name, args };
+        });
+        history.push({
+          role: "assistant",
+          content: "",
+          parts: out.parts ?? parsed.map((c) => ({ functionCall: { name: c.name, args: c.args } })),
+        });
+        for (const c of parsed) {
+          const result = await this.callTool(ws, c.name, c.args);
           history.push({ role: "tool", name: c.name, content: String(result).slice(0, 6000) });
         }
       }
@@ -210,7 +278,11 @@ export class JarvisHub extends DurableObject {
       answer = "Error del cerebro: " + e.message;
     }
 
-    await this.ctx.storage.put("history", history.slice(-20));
+    // Guardar solo el final del historial, empezando siempre por un mensaje del usuario.
+    const keep = history.slice(-20);
+    while (keep.length && keep[0].role !== "user") keep.shift();
+    await this.ctx.storage.put("history", keep);
+    if (geminiError) ws.send(JSON.stringify({ type: "note", text: "Gemini falló, usé el cerebro de reserva: " + geminiError }));
     ws.send(JSON.stringify({ type: "say", text: answer }));
   }
 }

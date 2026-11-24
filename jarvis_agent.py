@@ -584,6 +584,8 @@ async def session(cfg, inbox, busy, stash, voice):
                     if kind == "tool_call":
                         result = await loop.run_in_executor(None, run_tool, msg["name"], msg.get("args", {}))
                         await ws.send(json.dumps({"type": "tool_result", "id": msg["id"], "result": result}))
+                    elif kind == "note":
+                        log("Aviso:", msg["text"])
                     elif kind == "heard":
                         log("Tú (voz):", msg["text"])
                     elif kind == "say":
